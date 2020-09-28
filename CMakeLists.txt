@@ -15,12 +15,12 @@ find_package(catkin REQUIRED COMPONENTS
   op_planner
   op_ros_helpers
   op_utility	
-)
+) 
 
 
 set(CMAKE_CXX_FLAGS "-O2 -g -Wall ${CMAKE_CXX_FLAGS}")
 #set(CMAKE_CXX_FLAGS "-W -Wall -O3 -std=c++1z -DNDEBUG")
-
+add_compile_options(-std=c++11)
 find_package(Boost REQUIRED COMPONENTS system)
 
 
