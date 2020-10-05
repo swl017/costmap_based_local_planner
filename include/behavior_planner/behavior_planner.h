@@ -124,6 +124,7 @@ private:
   bool bAllPathBlocked;
   bool bObstacles;
   bool bCurrentPathColliding;
+  bool b_invert_yaw_increment;
   
   std::string m_base_frame_id;
   double m_local_update_horizon;
@@ -132,6 +133,10 @@ private:
   PlannerHNS::WayPoint m_VehiclePosePrev;
   PlannerHNS::WayPoint m_VehiclePoseCurrent;
   PlannerHNS::WayPoint m_VehiclePoseLocalPathRef;
+
+  double m_replan_time_interval;
+  double m_time_from_last_replan;
+  double m_time_of_last_replan;
 
   double* m_RollOutCost_ptr;
 
@@ -147,6 +152,7 @@ private:
   void SendLocalPlanningTopics();
   void AllPathBlockedSituation();
   void ReplanIfColliding(const autoware_msgs::Lane& CurrentLane);
+  void GetReplanFlag(bool& replan_flag); // sw: add replan condition flexibly
   tf::Transform getTransform(const std::string& from, const std::string& to);
   inline geometry_msgs::Pose transformPose(const geometry_msgs::Pose& pose, const tf::Transform& tf)
   {

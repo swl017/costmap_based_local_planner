@@ -36,7 +36,7 @@ int main(int argc, char** argv)
   ros::init(argc, argv, "behavior_planner");
   BehaviorPlanner behavior_planner;
   
-  ros::Rate loop_rate(20);
+  ros::Rate loop_rate(100);
   while(ros::ok())
   {
     ros::spinOnce();

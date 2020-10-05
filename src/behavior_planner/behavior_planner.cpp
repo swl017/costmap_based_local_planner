@@ -9,6 +9,8 @@ BehaviorPlanner::BehaviorPlanner() : nh_(""), private_nh_("~")
   private_nh_.param("base_frame_id", m_base_frame_id, std::string("base_link"));
   private_nh_.param("local_update_horizon", m_local_update_horizon, double(10));
   private_nh_.param("obstacle_padding", m_obstacle_padding, double(2));
+  private_nh_.param("invert_yaw_increment", b_invert_yaw_increment, false);
+  private_nh_.param("replan_time_interval", m_replan_time_interval, double(1.5));
 
   pub_LocalPath = nh_.advertise<autoware_msgs::Lane>("final_waypoints", 1,true);
   pub_LocalCoordPath = nh_.advertise<autoware_msgs::Lane>("final_waypoints/local_coordinate", 1,true);
@@ -54,6 +56,8 @@ void BehaviorPlanner::init()
 
   m_AccumulatedPose = 0;
   m_MinimumCostIndex = -1;
+
+  m_time_of_last_replan = ros::Time::now().toSec();
 }
 
 void BehaviorPlanner::run()
@@ -154,13 +158,17 @@ void BehaviorPlanner::SendLocalPlanningTopics()
   m_MinimumCostIndex = m_FinalPathCost_ptr->lane_index;
 
   // sw: cf@m_AccumulatedPose
-  if (m_AccumulatedPose > m_local_update_horizon || bCurrentPathColliding)
+  m_time_from_last_replan = ros::Time::now().toSec() - m_time_of_last_replan;
+  bool replan_flag;
+  GetReplanFlag(replan_flag);
+  if (replan_flag)
   {
     m_UpdatedLane = m_LaneArray_ptr ->lanes.at(m_FinalPathCost_ptr->lane_index);
     m_VehiclePoseLocalPathRef.pos.x = m_VehiclePoseCurrent.pos.x;
     m_VehiclePoseLocalPathRef.pos.y = m_VehiclePoseCurrent.pos.y;
     m_VehiclePoseLocalPathRef.pos.a = m_VehiclePoseCurrent.pos.a;
     m_AccumulatedPose = 0;
+    m_time_of_last_replan = ros::Time::now().toSec();
   }
   lane = m_UpdatedLane;
   pub_LocalPath.publish(lane); // piece of global waypoints
@@ -170,11 +178,74 @@ void BehaviorPlanner::SendLocalPlanningTopics()
   pub_LocalCoordPath.publish(temp_global_local_lane); // local coordinate local waypoints
 }
 
+// sw: add replan condition for flexibility
+void BehaviorPlanner::GetReplanFlag(bool& replan_flag){
+  int number_of_conditions = 3;
+  int conditions[number_of_conditions] = {0};
+  int temp = 0;
+  for(int i = 0; i<number_of_conditions; i++){
+    switch (i)
+    {
+    case 0:
+      if(m_AccumulatedPose > m_local_update_horizon){
+        conditions[i] = 1;
+        temp += 1;
+      } else{
+        conditions[i] = 0;
+      }
+      break;
+    case 1:
+      if(bCurrentPathColliding){
+        conditions[i] = 1;
+        temp += 1;
+      } else{
+        conditions[i] = 0;
+      }
+      break;
+    case 2:
+      if(m_time_from_last_replan > m_replan_time_interval){
+        conditions[i] = 1;
+        temp += 1;
+      } else{
+        conditions[i] = 0;
+      }
+      break;
+      // TODO: add condition to length constraint
+    // case 3:
+    //   // ROS_WARN("wapoints length: %d", m_UpdatedLane.waypoints[m_UpdatedLane.waypoints.size()-1].pose.pose.position.x / 2.0);
+    //   // std::cout << "wapoints length: " << m_UpdatedLane.waypoints[m_UpdatedLane.waypoints.size()-1].pose.pose.position.x / 2.0 << std::endl;
+    //   if(m_AccumulatedPose > m_UpdatedLane.waypoints[m_UpdatedLane.waypoints.size()-1].pose.pose.position.x / 10.0){
+    //     conditions[i] = 1;
+    //     temp += 1;
+    //   } else{
+    //     conditions[i] = 0;
+    //   }
+    //   break;
+
+    default:
+      break;
+    }
+  }
+  if(temp > 0){
+    replan_flag = true;
+  } else{
+    replan_flag = false;
+  }
+}
+
+
 /* 
  * @brief: local(m_VehiclePoseLocalPathRef = m_VehiclePoseCurrent) -> global(m_VehiclePoseCurrent) -> local(m_VehiclePoseCurrent)
  */
 void BehaviorPlanner::HoldLocalPathInGlobalFrame(const autoware_msgs::Lane& CurrentLane, autoware_msgs::Lane& temp_global_local_lane, 
                                                   const PlannerHNS::WayPoint& poseLocalRef, const PlannerHNS::WayPoint& poseCurrent){
+  float d_yaw;
+  if(b_invert_yaw_increment == true){
+    d_yaw = -(poseCurrent.pos.a-poseLocalRef.pos.a);
+  }
+  else{
+    d_yaw =   poseCurrent.pos.a-poseLocalRef.pos.a;
+  }
   // convert m_UpdatedLane to global frame with m_VehiclePoseLocalPathRef(local->global)
   autoware_msgs::Lane temp_global_lane;
   temp_global_lane.header.frame_id = "odom";
@@ -203,10 +274,17 @@ void BehaviorPlanner::HoldLocalPathInGlobalFrame(const autoware_msgs::Lane& Curr
     // TODO: turn frame_id variable
     waypoint.pose.header.frame_id = temp_local_lane.header.frame_id;
     // (global->local)
-    waypoint.pose.pose.position.x = (global_wpt_x - poseCurrent.pos.x) * cos(-poseCurrent.pos.a)
-                                    - (global_wpt_y - poseCurrent.pos.y) * sin(-poseCurrent.pos.a);
-    waypoint.pose.pose.position.y = (global_wpt_x - poseCurrent.pos.x) * sin(-poseCurrent.pos.a)
-                                    + (global_wpt_y - poseCurrent.pos.y) * cos(-poseCurrent.pos.a);
+    // waypoint.pose.pose.position.x = (global_wpt_x - poseCurrent.pos.x) * cos(-poseCurrent.pos.a)
+    //                                 - (global_wpt_y - poseCurrent.pos.y) * sin(-poseCurrent.pos.a);
+    // waypoint.pose.pose.position.y = (global_wpt_x - poseCurrent.pos.x) * sin(-poseCurrent.pos.a)
+    //                                 + (global_wpt_y - poseCurrent.pos.y) * cos(-poseCurrent.pos.a);
+    // sw: invert only the increment of yaw angle
+    float temp_yaw = poseLocalRef.pos.a + d_yaw;
+    waypoint.pose.pose.position.x = (global_wpt_x - poseCurrent.pos.x) * cos(-temp_yaw)
+                                    - (global_wpt_y - poseCurrent.pos.y) * sin(-temp_yaw);
+    waypoint.pose.pose.position.y = (global_wpt_x - poseCurrent.pos.x) * sin(-temp_yaw)
+                                    + (global_wpt_y - poseCurrent.pos.y) * cos(-temp_yaw);
+
     temp_local_lane.waypoints.push_back(waypoint);
   }
   // TODO sw: turn the two transforms (l->g, g->l) into a single transform.
@@ -264,6 +342,7 @@ void BehaviorPlanner::GetPoseAccumulated()
   }
   m_VehiclePosePrev.pos.x = m_VehiclePoseCurrent.pos.x;
   m_VehiclePosePrev.pos.y = m_VehiclePoseCurrent.pos.y;
+  m_VehiclePosePrev.pos.a = m_VehiclePoseCurrent.pos.a;
 }
 
 void BehaviorPlanner::AllPathBlockedSituation()
